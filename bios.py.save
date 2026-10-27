@@ -1,0 +1,103 @@
+import curses
+
+MENU = [
+    "Main - System Information",
+    "Advanced - Hardware",
+    "Power Management",
+    "Devices",
+    "System Log",
+    "Save & Exit",
+]
+def main(stdscr):
+    curses.curs_set(0)
+    curses.start_color()
+    curses.use_default_colors()
+
+    curses.init_pair(1, curses.COLOR_BLUE, curses.COLOR_WHITE)
+    curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_BLUE)
+    curses.init_pair(3, curses.COLOR_BLUE, curses.COLOR_WHITE)
+
+    selected = 0
+    categories = [
+        "Main", "Advanced", "Power",
+        "Devices", "System Log", "Exit"
+    ]
+
+    while True:
+        stdscr.erase()
+        height, width = stdscr.getmaxyx()
+
+        stdscr.bkgd(" ", curses.color_pair(1))
+
+        # Pasek tytułu
+        stdscr.attron(curses.color_pair(2))
+        stdscr.addstr(0, 0, " RETRO BIOS SETUP ".ljust(width))
+        stdscr.attroff(curses.color_pair(2))
+
+        # Kategorie poziomo
+        x = 2
+        for i, category in enumerate(categories):
+            label = f" {category} "
+            if i == selected:
+                stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
+
+            if x + len(label) < width:
+                stdscr.addstr(2, x, label)
+
+            if i == selected:
+                stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
+
+            x += len(label) + 1
+
+        # Główna zawartość
+        stdscr.addstr(5, 2, "System Configuration")
+        stdscr.addstr(7, 2, "Select a category using LEFT / RIGHT")
+        stdscr.addstr(8, 2, "Press ENTER to open")
+
+        # Dolny pasek
+        if height > 2:
+            stdscr.attron(curses.color_pair(2))
+            stdscr.addstr(height - 1, 0, " ENTER: Select   ESC: Back   Q: Quit ".ljust(width))
+
+
+        stdscr.refresh()
+        key = stdscr.getch()
+
+        if key == curses.KEY_LEFT:
+            selected = (selected - 1) % len(categories)
+        elif key == curses.KEY_RIGHT:
+            selected = (selected + 1) % len(categories)
+        elif key in (ord("q"), ord("Q")):
+            break
+
+    while True:
+        stdscr.clear()
+        height, width = stdscr.getmaxyx()
+
+        stdscr.addstr(1, 2, "RETRO BIOS SETUP UTILITY") 
+        stdscr.addstr(2, 2, "-" * 30)
+
+        for i, item in enumerate(MENU):
+            y = 4 + i
+            if y >= height - 2:
+                break
+
+            if i == selected:
+                stdscr.attron(curses.A_REVERSE)
+            stdscr.addstr(y, 4, item[:max(0, width - 6)])
+            if i == selected:
+                stdscr.attroff(curses.A_REVERSE)
+
+        stdscr.addstr(height - 2, 2, "UP/DOWN: Select   ENTER: Open   Q: Quit")
+        stdscr.refresh()
+
+        key = stdscr.getch()
+
+        if key == curses.KEY_UP:
+            selected = (selected - 1) % len(MENU)
+        elif key == curses.KEY_DOWN:
+            selected = (selected + 1) % len(MENU)
+        elif key in (ord("q"), ord("Q")):
+            break
+
+curses.wrapper(main)
