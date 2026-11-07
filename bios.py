@@ -1401,49 +1401,114 @@ def draw_header(stdscr, selected):
 
     )
 
-def draw_list(stdscr, title, options, selected, start_y=6, start_x=4, status=""):
+def draw_list(stdscr, title, options, selected, start_y=6, start_x=4, status="", max_width=None):
 
     height, width = stdscr.getmaxyx()
+    content_width = max_width if max_width is not None else width - start_x - 2
 
     safe_addstr(
-
-        stdscr, 4, start_x, title, width - start_x - 1,
-
+        stdscr, 4, start_x, title, content_width,
         curses.A_BOLD,
-
     )
 
     for index, option in enumerate(options):
-
         y = start_y + index * 2
-
         if y >= height - 3:
-
             break
-
         attr = curses.A_REVERSE if index == selected else curses.A_NORMAL
-
-        safe_addstr(stdscr, y, start_x, option, width - start_x - 2, attr)
+        safe_addstr(stdscr, y, start_x, option, content_width, attr)
 
     if status:
-
         safe_addstr(
-
             stdscr, height - 2, 2, status, width - 4,
-
             curses.A_BOLD,
-
         )
 
+
+def draw_setup_description(stdscr, heading, description, x=None):
+    """Draw a description panel on the normal setup screen."""
+    height, width = stdscr.getmaxyx()
+    if width < 70 or height < 12:
+        return
+    panel_x = x if x is not None else width // 2
+    panel_width = width - panel_x - 2
+    panel_height = height - 7
+    if panel_width < 18 or panel_height < 5:
+        return
+    try:
+        panel = curses.newwin(panel_height, panel_width, 4, panel_x)
+        panel.bkgd(" ", curses.color_pair(1))
+        panel.erase()
+        panel.attron(curses.color_pair(2))
+        panel.border()
+        panel.attroff(curses.color_pair(2))
+        safe_addstr(panel, 1, 2, heading, panel_width - 4,
+                    curses.color_pair(2) | curses.A_BOLD)
+        wrapped = textwrap.wrap(description, width=max(10, panel_width - 6)) or [""]
+        for i, line in enumerate(wrapped[:max(1, panel_height - 3)], start=3):
+            safe_addstr(panel, i, 2, line, panel_width - 4, curses.color_pair(1))
+        panel.refresh()
+    except curses.error:
+        pass
+
+def confirm_system_action(stdscr, title, message):
+    """Require explicit Y confirmation before rebooting or powering off."""
+    height, width = stdscr.getmaxyx()
+    box_width = min(max(len(message) + 6, len(title) + 6, 42), width - 4)
+    box_height = 7
+    if width < 30 or height < 10 or box_width < 20:
+        show_message(stdscr, "Terminal too small to confirm this action.", title)
+        return False
+    top = (height - box_height) // 2
+    left = (width - box_width) // 2
+    win = curses.newwin(box_height, box_width, top, left)
+    win.keypad(True)
+    win.bkgd(" ", curses.color_pair(4))
+    win.erase()
+    win.attron(curses.color_pair(4))
+    win.border()
+    safe_addstr(win, 1, 2, title, box_width - 4, curses.color_pair(4) | curses.A_BOLD)
+    safe_addstr(win, 3, 2, message, box_width - 4, curses.color_pair(4))
+    safe_addstr(win, 5, 2, "Press Y to confirm, any other key to cancel", box_width - 4,
+                curses.color_pair(4) | curses.A_BOLD)
+    win.refresh()
+    return win.getch() in (ord("y"), ord("Y"))
+
+
+def run_system_action(stdscr, action):
+    """Run a requested system power action only after confirmation."""
+    commands = {
+        "Reboot": ["systemctl", "reboot"],
+        "Boot to BIOS/UEFI": ["systemctl", "reboot", "--firmware-setup"],
+        "Shutdown": ["systemctl", "poweroff"],
+    }
+    prompts = {
+        "Reboot": "Restart the computer now?",
+        "Boot to BIOS/UEFI": "Restart and open BIOS/UEFI setup?",
+        "Shutdown": "Power off the computer now?",
+    }
+    if action not in commands:
+        return
+    if not confirm_system_action(stdscr, action, prompts[action]):
+        return
+    try:
+        result = subprocess.run(commands[action], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "Command failed.").strip()
+            show_message(stdscr, detail[:500], f"{action} failed")
+    except (OSError, subprocess.SubprocessError) as exc:
+        show_message(stdscr, str(exc), f"{action} failed")
+
+
 def configuration_menu(stdscr, config):
-    """Monochrome configuration screen with a left menu and right descriptions."""
-    choices = ["Appearance", "Fastfetch Settings", "Back"]
-    descriptions = [
-        "Change the interface text, background, and selection colors. "
-        "The Configuration screen itself stays white on black.",
-        "Choose whether Fastfetch is shown and select which system details "
-        "appear on the Main screen.",
-        "Return to the main Retro BIOS screen.",
+    """Full-screen GRUB-like monochrome configuration menu."""
+    choices = [
+        "Appearance",
+        "Fastfetch Settings",
+        "Reboot",
+        "Boot to BIOS/UEFI",
+        "Shutdown",
+        "Back",
     ]
     selected = 0
 
@@ -1452,89 +1517,70 @@ def configuration_menu(stdscr, config):
         stdscr.bkgd(" ", curses.color_pair(4))
         stdscr.erase()
 
-        title = "CONFIGURATION"
+        # Full-screen frame, similar to a bootloader menu.
+        try:
+            stdscr.attron(curses.color_pair(4))
+            stdscr.border()
+            stdscr.attroff(curses.color_pair(4))
+        except curses.error:
+            pass
+
+        title = "GRUB GNU 2026 (Configuration & More)"
+        title_x = max(1, (width - len(title)) // 2)
         safe_addstr(
-            stdscr, 1, max(0, (width - len(title)) // 2),
-            title, width, curses.color_pair(4) | curses.A_BOLD,
-        )
-
-        # Keep the layout usable in smaller terminal windows too.
-        top = 3
-        panel_height = max(5, height - 6)
-        left_x = 2
-        left_width = max(22, min(36, width // 3))
-        right_x = left_x + left_width + 1
-        right_width = width - right_x - 2
-
-        left = None
-        right = None
-        if width >= 48 and height >= 12 and right_width >= 18:
-            left = curses.newwin(panel_height, left_width, top, left_x)
-            right = curses.newwin(panel_height, right_width, top, right_x)
-            for panel in (left, right):
-                panel.bkgd(" ", curses.color_pair(4))
-                panel.erase()
-                panel.attron(curses.color_pair(4))
-                panel.border()
-                panel.attroff(curses.color_pair(4))
-
-            safe_addstr(
-                left, 1, 2, "SETTINGS", left_width - 4,
-                curses.color_pair(4) | curses.A_BOLD,
-            )
-            for index, choice in enumerate(choices):
-                row = index + 3
-                attr = (
-                    curses.color_pair(5) | curses.A_BOLD
-                    if index == selected else curses.color_pair(4)
-                )
-                safe_addstr(
-                    left, row, 2, choice, left_width - 4, attr,
-                )
-
-            safe_addstr(
-                right, 1, 2, "DESCRIPTION", right_width - 4,
-                curses.color_pair(4) | curses.A_BOLD,
-            )
-            description = descriptions[selected]
-            wrapped = textwrap.wrap(
-                description, width=max(10, right_width - 6)
-            ) or [""]
-            for index, line in enumerate(wrapped[:max(1, panel_height - 4)]):
-                safe_addstr(
-                    right, 3 + index, 2, line, right_width - 4,
-                    curses.color_pair(4),
-                )
-
-        else:
-            # Compact fallback for a small terminal.
-            for index, choice in enumerate(choices):
-                attr = (
-                    curses.color_pair(5) | curses.A_BOLD
-                    if index == selected else curses.color_pair(4)
-                )
-                safe_addstr(
-                    stdscr, 4 + index, 3, choice, width - 6, attr,
-                )
-            safe_addstr(
-                stdscr, 8, 3, descriptions[selected], width - 6,
-                curses.color_pair(4),
-            )
-
-        footer = "UP/DOWN: Move   ENTER: Select   ESC: Back"
-        safe_addstr(
-            stdscr, height - 1, 0, footer.center(width), width - 1,
+            stdscr, 1, title_x, title, max(1, width - title_x - 2),
             curses.color_pair(4) | curses.A_BOLD,
         )
-        # Refresh the base screen first, then overlay child panels so their
-        # borders and menu entries are not erased by a later stdscr.refresh().
-        stdscr.noutrefresh()
-        if left is not None and right is not None:
-            left.noutrefresh()
-            right.noutrefresh()
-            curses.doupdate()
+
+        if height >= 7 and width >= 24:
+            # Separator below the title.
+            try:
+                stdscr.addch(2, 1, curses.ACS_LTEE, curses.color_pair(4))
+                for x in range(2, width - 2):
+                    stdscr.addch(2, x, curses.ACS_HLINE, curses.color_pair(4))
+                stdscr.addch(2, width - 2, curses.ACS_RTEE, curses.color_pair(4))
+            except curses.error:
+                pass
+
+            safe_addstr(
+                stdscr, 4, 3, "SETUP OPTIONS",
+                max(1, width - 6), curses.color_pair(4) | curses.A_BOLD,
+            )
+
+            # Keep the list vertical and aligned to the left like a boot menu.
+            list_y = 6
+            for index, choice in enumerate(choices):
+                row = list_y + index
+                if row >= height - 3:
+                    break
+                attr = (
+                    curses.color_pair(5) | curses.A_BOLD
+                    if index == selected else curses.color_pair(4)
+                )
+                safe_addstr(
+                    stdscr, row, 5, choice,
+                    max(1, width - 10), attr,
+                )
         else:
-            curses.doupdate()
+            # Compact fallback for very small terminals.
+            for index, choice in enumerate(choices):
+                row = 3 + index
+                if row >= height - 1:
+                    break
+                attr = (
+                    curses.color_pair(5) | curses.A_BOLD
+                    if index == selected else curses.color_pair(4)
+                )
+                safe_addstr(stdscr, row, 1, choice, max(1, width - 3), attr)
+
+        footer = "UP/DOWN: Move   ENTER: Select   ESC: Back"
+        if height >= 4:
+            safe_addstr(
+                stdscr, height - 2, 2, footer,
+                max(1, width - 4), curses.color_pair(4) | curses.A_BOLD,
+            )
+
+        stdscr.refresh()
         key = stdscr.getch()
 
         if key in (27, ord("c"), ord("C")):
@@ -1548,9 +1594,10 @@ def configuration_menu(stdscr, config):
                 appearance_menu(stdscr, config)
             elif selected == 1:
                 fastfetch_menu(stdscr, config)
+            elif selected in (2, 3, 4):
+                run_system_action(stdscr, choices[selected])
             else:
                 return
-
             apply_theme(config)
             try:
                 save_app_config(config)
@@ -1919,6 +1966,10 @@ def main(stdscr):
                 "Terminal settings frontend - not motherboard firmware.",
                 width - 6,
             )
+            draw_setup_description(
+                stdscr, "MAIN DESCRIPTION",
+                "Welcome to GRUB GNU 2026. Use the category bar to configure power, devices, advanced settings, and Fastfetch display options.",
+            )
 
         elif category == "Advanced":
 
@@ -1939,7 +1990,15 @@ def main(stdscr):
                 stdscr, "Advanced Configuration",
 
                 options, advanced_selected, status=status_message,
+                max_width=(width // 2 - 6 if width >= 70 else None),
 
+            )
+            draw_setup_description(
+                stdscr, "ADVANCED DESCRIPTION",
+                [
+                    "Screen timeout controls how long the display waits before blanking.",
+                    "Choose Never or a timeout interval to suit your setup.",
+                ][0],
             )
 
         elif category == "Power":
@@ -1959,7 +2018,12 @@ def main(stdscr):
                 stdscr, "Power Configuration",
 
                 options, power_selected, status=status_message,
+                max_width=(width // 2 - 6 if width >= 70 else None),
 
+            )
+            draw_setup_description(
+                stdscr, "POWER DESCRIPTION",
+                "Adjust the system power profile and brightness. Some controls depend on hardware and desktop support.",
             )
 
             safe_addstr(
@@ -2027,7 +2091,20 @@ def main(stdscr):
                 stdscr, "Devices Configuration",
 
                 options, devices_selected, status=status_message,
+                max_width=(width // 2 - 6 if width >= 70 else None),
 
+            )
+            device_descriptions = [
+                "Choose the audio output device used for sound playback.",
+                "Choose the microphone or other audio input device.",
+                "Select a Wi-Fi network. Network changes may require system permissions.",
+                "Toggle Bluetooth support for this setup profile.",
+                "Adjust the output volume level.",
+                "Return to the Main category.",
+            ]
+            draw_setup_description(
+                stdscr, "DEVICES DESCRIPTION",
+                device_descriptions[min(devices_selected, len(device_descriptions) - 1)],
             )
 
         elif category == "System Log":
@@ -2052,7 +2129,11 @@ def main(stdscr):
 
                     break
 
-                safe_addstr(stdscr, index, 3, line, width - 5)
+                safe_addstr(stdscr, index, 3, line, (width // 2 - 5 if width >= 70 else width - 5))
+            draw_setup_description(
+                stdscr, "SYSTEM LOG DESCRIPTION",
+                "Recent application events and errors are shown on the left. The log is stored under ~/.local/state/retro-bios.log.",
+            )
 
         elif category == "Exit":
 
@@ -2063,7 +2144,18 @@ def main(stdscr):
                 EXIT_OPTIONS, exit_selected,
 
                 status=status_message,
+                max_width=(width // 2 - 6 if width >= 70 else None),
 
+            )
+            exit_descriptions = [
+                "Apply pending changes, save them, and exit the setup program.",
+                "Discard unsaved changes and exit without applying them.",
+                "Restore default settings in the current draft. Save them to apply.",
+                "Return to the Main category without exiting.",
+            ]
+            draw_setup_description(
+                stdscr, "EXIT DESCRIPTION",
+                exit_descriptions[min(exit_selected, len(exit_descriptions) - 1)],
             )
 
         safe_addstr(
